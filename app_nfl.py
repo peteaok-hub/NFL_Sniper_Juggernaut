@@ -43,7 +43,7 @@ def log_prediction(week, home, away, winner, confidence, rating, edge, note):
     except: pass
 
 def heal_data_engine():
-    """Downloads Data & Calculates Momentum"""
+    """Downloads Data & Calculates Momentum (NFL ONLY)"""
     print("📡 DOWNLOADING FRESH NFL DATA...")
     URL = "https://github.com/nflverse/nfldata/raw/master/data/games.csv"
     try:
@@ -158,7 +158,6 @@ with st.sidebar:
     st.markdown("### 🎲 VEGAS CHECK")
     vegas_line = st.number_input("Enter Vegas Line (e.g. -110)", value=-110, step=10)
     
-    # Implied Probability Calc
     if vegas_line < 0: imp_prob = abs(vegas_line) / (abs(vegas_line) + 100) * 100
     else: imp_prob = 100 / (vegas_line + 100) * 100
     
