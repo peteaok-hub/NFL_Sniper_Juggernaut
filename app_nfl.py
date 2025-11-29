@@ -32,8 +32,8 @@ def log_prediction(week, home, away, winner, confidence, rating, edge, note):
             "Matchup": f"{away} @ {home}",
             "Pick": winner,
             "Confidence": f"{confidence:.1f}%",
-            "Edge": f"{edge:+.1f}%", # Added Edge Column
-            "Rating": rating, # Added Rating Column
+            "Edge": f"{edge:+.1f}%",
+            "Rating": rating,
             "Note": note
         }
         if os.path.exists(HISTORY_FILE): df = pd.read_csv(HISTORY_FILE)
@@ -95,13 +95,18 @@ def heal_brain_engine():
         
     try:
         df = pd.read_csv("nfl_games_processed.csv")
+        
+        # Train on MOMENTUM, not Names
         features = ['h_mom', 'h_off', 'a_mom', 'a_off']
         X = df[features]
         y = df['home_win']
+        
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
+        
         model = RidgeClassifier(alpha=1.0)
         model.fit(X_scaled, y)
+        
         pkg = {"model": model, "scaler": scaler, "predictors": features}
         with open("nfl_model_v1.pkl", "wb") as f: pickle.dump(pkg, f)
         return pkg
@@ -111,14 +116,27 @@ def heal_brain_engine():
 
 @st.cache_resource
 def load_system():
-    if not os.path.exists("nfl_games_processed.csv"): heal_data_engine()
-    if not os.path.exists("nfl_model_v1.pkl"): heal_brain_engine()
     try:
+        # 1. Check Data
+        if not os.path.exists("nfl_games_processed.csv"):
+            with st.spinner("Downloading NFL Data..."):
+                heal_data_engine()
+        
+        # 2. Check Brain
+        if not os.path.exists("nfl_model_v1.pkl"):
+            with st.spinner("Training Neural Network..."):
+                heal_brain_engine()
+        
+        # Load Everything
         df = pd.read_csv("nfl_games_processed.csv")
         teams = sorted(df['home_team'].unique())
-        with open("nfl_model_v1.pkl", "rb") as f: pkg = pickle.load(f)
+        
+        with open("nfl_model_v1.pkl", "rb") as f:
+            pkg = pickle.load(f)
+            
         return df, teams, pkg
     except:
+        # Force Rebuild
         heal_data_engine()
         pkg = heal_brain_engine()
         df = pd.read_csv("nfl_games_processed.csv")
@@ -153,12 +171,10 @@ with st.sidebar:
     away_team = st.selectbox("Away Team", teams, index=a_idx)
     week = st.slider("Season Week", 1, 18, 1)
     
-    # Vegas Line Input
     st.divider()
     st.markdown("### 🎲 VEGAS CHECK")
     vegas_line = st.number_input("Enter Vegas Line (e.g. -110)", value=-110, step=10)
     
-    # Implied Probability Calc
     if vegas_line < 0: imp_prob = abs(vegas_line) / (abs(vegas_line) + 100) * 100
     else: imp_prob = 100 / (vegas_line + 100) * 100
     
@@ -185,11 +201,9 @@ with c3: st.markdown(f"<h1 style='text-align:center'>{home_team}</h1>", unsafe_a
 st.divider()
 
 if st.button("🚀 RUN MOMENTUM SIMULATION", type="primary", use_container_width=True):
-    # 1. Data
     h_mom, h_off = get_momentum(home_team)
     a_mom, a_off = get_momentum(away_team)
     
-    # 2. Predict
     in_data = pd.DataFrame([[h_mom, h_off, a_mom, a_off]], columns=['h_mom', 'h_off', 'a_mom', 'a_off'])
     sc_data = scaler.transform(in_data)
     raw = model.decision_function(sc_data)[0]
@@ -199,35 +213,29 @@ if st.button("🚀 RUN MOMENTUM SIMULATION", type="primary", use_container_width
     confidence = 50 + (abs(raw) * 50)
     confidence = min(99.9, confidence)
     
-    # 3. Edge Calculation
     edge = confidence - imp_prob
     
-    # 4. Rating Logic
     rating = "PASS"
     if edge >= 10: rating = "DIAMOND"
     elif edge >= 5: rating = "GOLD"
     elif confidence > 60: rating = "SILVER"
     
-    # 5. Log
     mom_note = f"Diff: {h_mom:.1f} vs {a_mom:.1f}"
     log_prediction(week, home_team, away_team, winner, confidence, rating, edge, mom_note)
     
-    # 6. Render
     color = "#66fcf1" if confidence > 60 else "#c5c6c7"
     edge_color = "#00ff00" if edge > 0 else "#ff4444"
     
     c_res1, c_res2 = st.columns(2)
     with c_res1:
-        st.markdown(f"""
-        <div style="background:#1f2833; border:1px solid {color}; border-radius:10px; padding:20px; text-align:center;">
+        st.markdown(f"""<div class="metric-card" style="border-color: {color};">
             <h3 style="color:#aaa">PROJECTED WINNER</h3>
             <h1 style="font-size:3em; margin:0; color:{color}">{winner}</h1>
             <h2 style="color:white">{confidence:.1f}%</h2>
         </div>""", unsafe_allow_html=True)
         
     with c_res2:
-        st.markdown(f"""
-        <div style="background:#1f2833; border:1px solid {edge_color}; border-radius:10px; padding:20px; text-align:center;">
+        st.markdown(f"""<div class="metric-card" style="border-color: {edge_color};">
             <h3 style="color:#aaa">EDGE vs VEGAS</h3>
             <h1 style="font-size:3em; margin:0; color:{edge_color}">{edge:+.1f}%</h1>
             <h2 style="color:white">{rating}</h2>
