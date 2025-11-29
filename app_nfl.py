@@ -171,6 +171,7 @@ with st.sidebar:
     away_team = st.selectbox("Away Team", teams, index=a_idx)
     week = st.slider("Season Week", 1, 18, 1)
     
+    # Vegas Line Input
     st.divider()
     st.markdown("### 🎲 VEGAS CHECK")
     vegas_line = st.number_input("Enter Vegas Line (e.g. -110)", value=-110, step=10)
@@ -201,9 +202,11 @@ with c3: st.markdown(f"<h1 style='text-align:center'>{home_team}</h1>", unsafe_a
 st.divider()
 
 if st.button("🚀 RUN MOMENTUM SIMULATION", type="primary", use_container_width=True):
+    # 1. Data
     h_mom, h_off = get_momentum(home_team)
     a_mom, a_off = get_momentum(away_team)
     
+    # 2. Predict
     in_data = pd.DataFrame([[h_mom, h_off, a_mom, a_off]], columns=['h_mom', 'h_off', 'a_mom', 'a_off'])
     sc_data = scaler.transform(in_data)
     raw = model.decision_function(sc_data)[0]
@@ -213,29 +216,35 @@ if st.button("🚀 RUN MOMENTUM SIMULATION", type="primary", use_container_width
     confidence = 50 + (abs(raw) * 50)
     confidence = min(99.9, confidence)
     
+    # 3. Edge Calculation
     edge = confidence - imp_prob
     
+    # 4. Rating Logic
     rating = "PASS"
     if edge >= 10: rating = "DIAMOND"
     elif edge >= 5: rating = "GOLD"
     elif confidence > 60: rating = "SILVER"
     
+    # 5. Log
     mom_note = f"Diff: {h_mom:.1f} vs {a_mom:.1f}"
     log_prediction(week, home_team, away_team, winner, confidence, rating, edge, mom_note)
     
+    # 6. Render
     color = "#66fcf1" if confidence > 60 else "#c5c6c7"
     edge_color = "#00ff00" if edge > 0 else "#ff4444"
     
     c_res1, c_res2 = st.columns(2)
     with c_res1:
-        st.markdown(f"""<div class="metric-card" style="border-color: {color};">
+        st.markdown(f"""
+        <div style="background:#1f2833; border:1px solid {color}; border-radius:10px; padding:20px; text-align:center;">
             <h3 style="color:#aaa">PROJECTED WINNER</h3>
             <h1 style="font-size:3em; margin:0; color:{color}">{winner}</h1>
             <h2 style="color:white">{confidence:.1f}%</h2>
         </div>""", unsafe_allow_html=True)
         
     with c_res2:
-        st.markdown(f"""<div class="metric-card" style="border-color: {edge_color};">
+        st.markdown(f"""
+        <div style="background:#1f2833; border:1px solid {edge_color}; border-radius:10px; padding:20px; text-align:center;">
             <h3 style="color:#aaa">EDGE vs VEGAS</h3>
             <h1 style="font-size:3em; margin:0; color:{edge_color}">{edge:+.1f}%</h1>
             <h2 style="color:white">{rating}</h2>
