@@ -32,8 +32,8 @@ def log_prediction(week, home, away, winner, confidence, rating, edge, note):
             "Matchup": f"{away} @ {home}",
             "Pick": winner,
             "Confidence": f"{confidence:.1f}%",
-            "Edge": f"{edge:+.1f}%",
-            "Rating": rating,
+            "Edge": f"{edge:+.1f}%", # Added Edge Column
+            "Rating": rating, # Added Rating Column
             "Note": note
         }
         if os.path.exists(HISTORY_FILE): df = pd.read_csv(HISTORY_FILE)
@@ -95,18 +95,13 @@ def heal_brain_engine():
         
     try:
         df = pd.read_csv("nfl_games_processed.csv")
-        
-        # Train on MOMENTUM, not Names
         features = ['h_mom', 'h_off', 'a_mom', 'a_off']
         X = df[features]
         y = df['home_win']
-        
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
-        
         model = RidgeClassifier(alpha=1.0)
         model.fit(X_scaled, y)
-        
         pkg = {"model": model, "scaler": scaler, "predictors": features}
         with open("nfl_model_v1.pkl", "wb") as f: pickle.dump(pkg, f)
         return pkg
@@ -116,27 +111,14 @@ def heal_brain_engine():
 
 @st.cache_resource
 def load_system():
+    if not os.path.exists("nfl_games_processed.csv"): heal_data_engine()
+    if not os.path.exists("nfl_model_v1.pkl"): heal_brain_engine()
     try:
-        # 1. Check Data
-        if not os.path.exists("nfl_games_processed.csv"):
-            with st.spinner("Downloading NFL Data..."):
-                heal_data_engine()
-        
-        # 2. Check Brain
-        if not os.path.exists("nfl_model_v1.pkl"):
-            with st.spinner("Training Neural Network..."):
-                heal_brain_engine()
-        
-        # Load Everything
         df = pd.read_csv("nfl_games_processed.csv")
         teams = sorted(df['home_team'].unique())
-        
-        with open("nfl_model_v1.pkl", "rb") as f:
-            pkg = pickle.load(f)
-            
+        with open("nfl_model_v1.pkl", "rb") as f: pkg = pickle.load(f)
         return df, teams, pkg
     except:
-        # Force Rebuild
         heal_data_engine()
         pkg = heal_brain_engine()
         df = pd.read_csv("nfl_games_processed.csv")
@@ -176,6 +158,7 @@ with st.sidebar:
     st.markdown("### 🎲 VEGAS CHECK")
     vegas_line = st.number_input("Enter Vegas Line (e.g. -110)", value=-110, step=10)
     
+    # Implied Probability Calc
     if vegas_line < 0: imp_prob = abs(vegas_line) / (abs(vegas_line) + 100) * 100
     else: imp_prob = 100 / (vegas_line + 100) * 100
     
