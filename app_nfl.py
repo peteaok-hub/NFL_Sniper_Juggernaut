@@ -3,6 +3,7 @@ import pandas as pd
 import nfl_brain as brain
 import warnings
 import os
+import requests
 
 warnings.filterwarnings("ignore")
 
@@ -10,15 +11,16 @@ st.set_page_config(page_title="NFL Sniper 5.0", layout="wide", page_icon="🏈")
 
 # CONFIG
 ODDS_API_KEY = "3e039d8cfd426d394b020b55bd303a07"
+# Map NFLVerse Team Codes to Odds API Team Names (Approximate)
 TEAM_MAP = {
-    "Arizona Cardinals":"ARI","Atlanta Falcons":"ATL","Baltimore Ravens":"BAL","Buffalo Bills":"BUF",
-    "Carolina Panthers":"CAR","Chicago Bears":"CHI","Cincinnati Bengals":"CIN","Cleveland Browns":"CLE",
-    "Dallas Cowboys":"DAL","Denver Broncos":"DEN","Detroit Lions":"DET","Green Bay Packers":"GB",
-    "Houston Texans":"HOU","Indianapolis Colts":"IND","Jacksonville Jaguars":"JAX","Kansas City Chiefs":"KC",
-    "Las Vegas Raiders":"LV","Los Angeles Chargers":"LAC","Los Angeles Rams":"LA","Miami Dolphins":"MIA",
-    "Minnesota Vikings":"MIN","New England Patriots":"NE","New Orleans Saints":"NO","New York Giants":"NYG",
-    "New York Jets":"NYJ","Philadelphia Eagles":"PHI","Pittsburgh Steelers":"PIT","San Francisco 49ers":"SF",
-    "Seattle Seahawks":"SEA","Tampa Bay Buccaneers":"TB","Tennessee Titans":"TEN","Washington Commanders":"WAS"
+    "ARI":"Arizona Cardinals","ATL":"Atlanta Falcons","BAL":"Baltimore Ravens","BUF":"Buffalo Bills",
+    "CAR":"Carolina Panthers","CHI":"Chicago Bears","CIN":"Cincinnati Bengals","CLE":"Cleveland Browns",
+    "DAL":"Dallas Cowboys","DEN":"Denver Broncos","DET":"Detroit Lions","GB":"Green Bay Packers",
+    "HOU":"Houston Texans","IND":"Indianapolis Colts","JAX":"Jacksonville Jaguars","KC":"Kansas City Chiefs",
+    "LV":"Las Vegas Raiders","LAC":"Los Angeles Chargers","LA":"Los Angeles Rams","MIA":"Miami Dolphins",
+    "MIN":"Minnesota Vikings","NE":"New England Patriots","NO":"New Orleans Saints","NYG":"New York Giants",
+    "NYJ":"New York Jets","PHI":"Philadelphia Eagles","PIT":"Pittsburgh Steelers","SF":"San Francisco 49ers",
+    "SEA":"Seattle Seahawks","TB":"Tampa Bay Buccaneers","TEN":"Tennessee Titans","WAS":"Washington Commanders"
 }
 
 # STYLES
@@ -62,6 +64,8 @@ with st.sidebar:
     
     if st.button("🔄 REFRESH MARKET"):
         st.cache_resource.clear()
+        brain.heal_data_engine()
+        brain.heal_brain_engine()
         st.rerun()
         
     if st.checkbox("Show Ledger"):
@@ -101,12 +105,6 @@ if "home" in st.session_state:
     confidence = min(99.9, confidence)
     
     # 2. LINE SHOPPING (LIVE API)
-    # Fetch odds for ALL games and find ours
-    # Note: Using fetch_best_odds logic (implementation assumed in nfl_brain or inline)
-    # For this snippet, we'll simulate the call or need the function in nfl_brain.py as well
-    # Assuming fetch_best_odds is not in nfl_brain.py yet based on previous turn, let's put it inline here or add to brain.
-    # To keep it clean, I'll add the logic here using the brain module if available, or implement a local helper.
-    
     # Helper to fetch odds locally if not in brain
     def get_odds_local(h, a):
          url = f"https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds/?apiKey={ODDS_API_KEY}&regions=us&markets=h2h&bookmakers=draftkings,fanduel,betmgm,caesars&oddsFormat=american"
@@ -115,37 +113,38 @@ if "home" in st.session_state:
          except: return []
 
     raw_odds = get_odds_local(home, away)
-    best_line = {"book": "Unknown", "odds": -110, "dec": 1.91}
+    
+    # Initialize with safe defaults
+    best_line = {"book": "Unknown", "odds": -110, "dec": 1.91, "amer": "-110"}
     
     # Parse API Response to find BEST odds for the PREDICTED WINNER
-    for g in raw_odds:
-        # Fuzzy match teams
-        api_h = TEAM_MAP.get(g['home_team'], g['home_team'])
-        api_a = TEAM_MAP.get(g['away_team'], g['away_team'])
-        
-        if api_h == home or api_a == away:
-            for book in g['bookmakers']:
-                for m in book['markets']:
-                    if m['key'] == 'h2h':
-                        for outcome in m['outcomes']:
-                            # Map outcome name to code
-                            o_name = TEAM_MAP.get(outcome['name'], outcome['name'][:3].upper())
-                            
-                            if o_name == winner:
-                                # Check if this is the best price found so far
-                                if outcome['price'] > best_line['dec']:
-                                    best_line = {
-                                        "book": book['title'],
-                                        "odds": outcome['point'] if 'point' in outcome else outcome['price'], # Handle US/Dec format issues
-                                        "dec": outcome['price']
-                                    }
-                                    # Convert decimal to American for display if needed
-                                    if best_line['odds'] < 2.0 and best_line['odds'] > 1.0:
-                                         # Simple Decimal to American approx for display
-                                         if best_line['dec'] >= 2.0: best_line['amer'] = f"+{int((best_line['dec']-1)*100)}"
-                                         else: best_line['amer'] = f"{int(-100/(best_line['dec']-1))}"
-                                    else:
-                                         best_line['amer'] = str(best_line['odds'])
+    if isinstance(raw_odds, list):
+        for g in raw_odds:
+            # Fuzzy match teams
+            api_h = TEAM_MAP.get(g['home_team'], g['home_team'])
+            api_a = TEAM_MAP.get(g['away_team'], g['away_team'])
+            
+            if api_h == home or api_a == away:
+                for book in g['bookmakers']:
+                    for m in book['markets']:
+                        if m['key'] == 'h2h':
+                            for outcome in m['outcomes']:
+                                # Map outcome name to code
+                                o_name = TEAM_MAP.get(outcome['name'], outcome['name'][:3].upper())
+                                
+                                if o_name == winner:
+                                    # Check if this is the best price found so far
+                                    if outcome['price'] > best_line['dec']:
+                                        best_line = {
+                                            "book": book['title'],
+                                            "odds": outcome['price'], # Using decimal for math
+                                            "dec": outcome['price']
+                                        }
+                                        # Convert decimal to American for display if needed
+                                        if best_line['dec'] >= 2.0:
+                                            best_line['amer'] = f"+{int((best_line['dec']-1)*100)}"
+                                        else:
+                                            best_line['amer'] = f"{int(-100/(best_line['dec']-1))}"
 
     # 3. KELLY CALCULATION
     # Inline Kelly calc if not in brain
@@ -178,7 +177,7 @@ if "home" in st.session_state:
     with c2:
         st.markdown(f"""<div class="metric-card">
             <h3>BEST LINE</h3>
-            <h1 style="color:white">{best_line['amer']}</h1>
+            <h1 style="color:white">{best_line.get('amer', '-110')}</h1>
             <p style="color:#aaa">@ {best_line['book']}</p>
         </div>""", unsafe_allow_html=True)
         
@@ -191,7 +190,7 @@ if "home" in st.session_state:
         
     # LOGGING
     if st.button("💾 LOG TRANSACTION"):
-        brain.log_prediction(st.session_state.week, home, away, winner, confidence, rating, edge, f"Kelly {kelly_pct:.1f}%")
+        brain.log_prediction(st.session_state.week, home, away, winner, confidence, rating, edge, f"Kelly {kelly_pct:.1f}%", wager_amt, best_line['book'])
         st.success("Transaction Recorded.")
     
     # MOMENTUM
