@@ -1,237 +1,199 @@
-import safety_protocol # Iron Dome
 import streamlit as st
 import pandas as pd
-import numpy as np
-import pickle
-import os
-import requests
-from sklearn.linear_model import RidgeClassifier
-from sklearn.preprocessing import StandardScaler
+import nfl_brain as brain
 import warnings
-from datetime import datetime
+import os
 
-# Silence Warnings
 warnings.filterwarnings("ignore")
 
-# ==========================================
-# 1. CONFIGURATION
-# ==========================================
-st.set_page_config(page_title="NFL Sniper Pro", layout="wide", page_icon="🏈")
-HISTORY_FILE = "nfl_betting_history.csv"
+st.set_page_config(page_title="NFL Sniper 5.0", layout="wide", page_icon="🏈")
 
-# ==========================================
-# 2. INTELLIGENCE ENGINES (Backend)
-# ==========================================
+# CONFIG
+ODDS_API_KEY = "3e039d8cfd426d394b020b55bd303a07"
+TEAM_MAP = {
+    "Arizona Cardinals":"ARI","Atlanta Falcons":"ATL","Baltimore Ravens":"BAL","Buffalo Bills":"BUF",
+    "Carolina Panthers":"CAR","Chicago Bears":"CHI","Cincinnati Bengals":"CIN","Cleveland Browns":"CLE",
+    "Dallas Cowboys":"DAL","Denver Broncos":"DEN","Detroit Lions":"DET","Green Bay Packers":"GB",
+    "Houston Texans":"HOU","Indianapolis Colts":"IND","Jacksonville Jaguars":"JAX","Kansas City Chiefs":"KC",
+    "Las Vegas Raiders":"LV","Los Angeles Chargers":"LAC","Los Angeles Rams":"LA","Miami Dolphins":"MIA",
+    "Minnesota Vikings":"MIN","New England Patriots":"NE","New Orleans Saints":"NO","New York Giants":"NYG",
+    "New York Jets":"NYJ","Philadelphia Eagles":"PHI","Pittsburgh Steelers":"PIT","San Francisco 49ers":"SF",
+    "Seattle Seahawks":"SEA","Tampa Bay Buccaneers":"TB","Tennessee Titans":"TEN","Washington Commanders":"WAS"
+}
 
-def log_prediction(week, home, away, winner, confidence, rating, edge, note):
-    """Logs telemetry to CSV."""
-    try:
-        new_rec = {
-            "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "Week": f"Week {week}",
-            "Matchup": f"{away} @ {home}",
-            "Pick": winner,
-            "Confidence": f"{confidence:.1f}%",
-            "Edge": f"{edge:+.1f}%", # Added Edge Column
-            "Rating": rating, # Added Rating Column
-            "Note": note
-        }
-        if os.path.exists(HISTORY_FILE): df = pd.read_csv(HISTORY_FILE)
-        else: df = pd.DataFrame(columns=new_rec.keys())
-        df = pd.concat([df, pd.DataFrame([new_rec])], ignore_index=True)
-        df.to_csv(HISTORY_FILE, index=False)
-    except: pass
+# STYLES
+st.markdown("""
+<style>
+    .stApp { background-color: #0e0e12; color: #ffffff; font-family: monospace; }
+    .metric-card {
+        background: #1f1f1f; border: 1px solid #444; border-radius: 8px; padding: 15px;
+        text-align: center; margin-bottom: 10px;
+    }
+    .best-line { border: 2px solid #00ff00; animation: pulse 2s infinite; }
+    .arb-alert { background: #ffdd00; color: black; font-weight: bold; padding: 5px; border-radius: 5px; }
+    h1, h2, h3 { color: white !important; }
+    .neon-green { color: #00ff00; font-weight: bold; }
+    .neon-red { color: #ff3355; font-weight: bold; }
+    
+    div.stButton > button {
+        width: 100%; background-color: #222; color: white; border: 1px solid #444; height: 80px;
+    }
+    div.stButton > button:hover { border-color: #00ffaa; color: #00ffaa; }
+</style>
+""", unsafe_allow_html=True)
 
-def heal_data_engine():
-    """Downloads Data & Calculates Momentum (NFL ONLY)"""
-    print("📡 DOWNLOADING FRESH NFL DATA...")
-    URL = "https://github.com/nflverse/nfldata/raw/master/data/games.csv"
-    try:
-        r = requests.get(URL, timeout=10)
-        with open("nfl_games.csv", "wb") as f: f.write(r.content)
-        
-        # Load & Filter
-        df = pd.read_csv("nfl_games.csv")
-        df = df[df['season'] >= 2020].copy()
-        df['home_margin'] = df['home_score'] - df['away_score']
-        df['away_margin'] = df['away_score'] - df['home_score']
-        df['home_win'] = np.where(df['home_margin'] > 0, 1, 0)
-        
-        # STACKING: Create Team Logs for Rolling Stats
-        h_games = df[['game_id', 'season', 'week', 'home_team', 'home_score', 'home_margin']].rename(
-            columns={'home_team': 'team', 'home_score': 'score', 'home_margin': 'margin'})
-        a_games = df[['game_id', 'season', 'week', 'away_team', 'away_score', 'away_margin']].rename(
-            columns={'away_team': 'team', 'away_score': 'score', 'away_margin': 'margin'})
-        
-        logs = pd.concat([h_games, a_games]).sort_values(['team', 'season', 'week'])
-        
-        # Rolling Calc (L5 Games)
-        logs['roll_margin'] = logs.groupby('team')['margin'].rolling(5, min_periods=1).mean().reset_index(0, drop=True)
-        logs['roll_score'] = logs.groupby('team')['score'].rolling(5, min_periods=1).mean().reset_index(0, drop=True)
-        
-        # Shift (Pre-Game Stats)
-        logs['pre_margin'] = logs.groupby('team')['roll_margin'].shift(1).fillna(0)
-        logs['pre_score'] = logs.groupby('team')['roll_score'].shift(1).fillna(0)
-        
-        # Merge Back
-        h_stats = logs[['game_id', 'team', 'pre_margin', 'pre_score']].rename(
-            columns={'team': 'home_team', 'pre_margin': 'h_mom', 'pre_score': 'h_off'})
-        a_stats = logs[['game_id', 'team', 'pre_margin', 'pre_score']].rename(
-            columns={'team': 'away_team', 'pre_margin': 'a_mom', 'pre_score': 'a_off'})
-            
-        df_final = df.merge(h_stats, on=['game_id', 'home_team'])
-        df_final = df_final.merge(a_stats, on=['game_id', 'away_team'])
-        
-        df_final.to_csv("nfl_games_processed.csv", index=False)
-        return df_final
-    except Exception as e:
-        st.error(f"Data Failure: {e}")
-        return None
-
-def heal_brain_engine():
-    """Retrains Model on Momentum Features"""
-    print("🧠 RETRAINING MOMENTUM BRAIN...")
-    if not os.path.exists("nfl_games_processed.csv"): heal_data_engine()
-        
-    try:
-        df = pd.read_csv("nfl_games_processed.csv")
-        features = ['h_mom', 'h_off', 'a_mom', 'a_off']
-        X = df[features]
-        y = df['home_win']
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-        model = RidgeClassifier(alpha=1.0)
-        model.fit(X_scaled, y)
-        pkg = {"model": model, "scaler": scaler, "predictors": features}
-        with open("nfl_model_v1.pkl", "wb") as f: pickle.dump(pkg, f)
-        return pkg
-    except Exception as e:
-        st.error(f"Brain Failure: {e}")
-        return None
-
-@st.cache_resource
-def load_system():
-    if not os.path.exists("nfl_games_processed.csv"): heal_data_engine()
-    if not os.path.exists("nfl_model_v1.pkl"): heal_brain_engine()
-    try:
-        df = pd.read_csv("nfl_games_processed.csv")
-        teams = sorted(df['home_team'].unique())
-        with open("nfl_model_v1.pkl", "rb") as f: pkg = pickle.load(f)
-        return df, teams, pkg
-    except:
-        heal_data_engine()
-        pkg = heal_brain_engine()
-        df = pd.read_csv("nfl_games_processed.csv")
-        teams = sorted(df['home_team'].unique())
-        return df, teams, pkg
-
-df, teams, pkg = load_system()
-model = pkg["model"]
-scaler = pkg["scaler"]
-
-# --- HELPER: GET MOMENTUM ---
-def get_momentum(team_name):
-    last_home = df[df['home_team'] == team_name].tail(1)
-    last_away = df[df['away_team'] == team_name].tail(1)
-    if not last_home.empty and (last_away.empty or last_home.index[-1] > last_away.index[-1]):
-        return last_home.iloc[0]['h_mom'], last_home.iloc[0]['h_off']
-    elif not last_away.empty:
-        return last_away.iloc[0]['a_mom'], last_away.iloc[0]['a_off']
-    return 0, 0
-
-# ==========================================
-# 3. DASHBOARD
-# ==========================================
-st.title("🏈 NFL SNIPER: MOMENTUM JUGGERNAUT")
+# LOAD
+df, teams, pkg = brain.load_system()
+if not pkg: st.error("⚠️ System Offline."); st.stop()
+model, scaler = pkg["model"], pkg["scaler"]
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.header("📍 MATCHUP CONFIG")
-    try: h_idx, a_idx = teams.index("KC"), teams.index("SF")
-    except: h_idx, a_idx = 0, 1
-    home_team = st.selectbox("Home Team", teams, index=h_idx)
-    away_team = st.selectbox("Away Team", teams, index=a_idx)
-    week = st.slider("Season Week", 1, 18, 1)
+    st.title("🏦 KELLY VAULT")
     
-    # Vegas Line Input
-    st.divider()
-    st.markdown("### 🎲 VEGAS CHECK")
-    vegas_line = st.number_input("Enter Vegas Line (e.g. -110)", value=-110, step=10)
-    
-    if vegas_line < 0: imp_prob = abs(vegas_line) / (abs(vegas_line) + 100) * 100
-    else: imp_prob = 100 / (vegas_line + 100) * 100
-    
-    st.caption(f"Implied Win Probability: {imp_prob:.1f}%")
+    bankroll = st.number_input("Total Bankroll ($)", value=1000.0, step=100.0)
+    kelly_fraction = st.selectbox("Risk Profile", [0.25, 0.5, 1.0], format_func=lambda x: f"{x}x Kelly (Recommended: 0.25)")
     
     st.divider()
-    st.markdown("### 📜 Betting History")
-    if st.checkbox("Show History"):
-        if os.path.exists(HISTORY_FILE): st.dataframe(pd.read_csv(HISTORY_FILE).tail(5), hide_index=True)
-            
-    with st.expander("🛠️ SYSTEM MAINTENANCE"):
-        if st.button("🔄 FORCE SYSTEM UPDATE"):
-            st.cache_resource.clear()
-            heal_data_engine()
-            heal_brain_engine()
-            st.rerun()
+    st.markdown("### 📍 MISSION CONTROL")
+    max_week = int(df['week'].max()) if 'week' in df.columns else 18
+    if "week" not in st.session_state: st.session_state.week = max_week
+    selected_week = st.slider("Week", 1, 18, st.session_state.week)
+    
+    if st.button("🔄 REFRESH MARKET"):
+        st.cache_resource.clear()
+        st.rerun()
+        
+    if st.checkbox("Show Ledger"):
+        if os.path.exists(brain.HISTORY_FILE):
+            st.dataframe(pd.read_csv(brain.HISTORY_FILE).tail(5), hide_index=True)
 
-# --- MAIN ---
-c1, c2, c3 = st.columns([1, 0.5, 1])
-with c1: st.markdown(f"<h1 style='text-align:center'>{away_team}</h1>", unsafe_allow_html=True)
-with c2: st.markdown("<h1 style='text-align:center'>VS</h1>", unsafe_allow_html=True)
-with c3: st.markdown(f"<h1 style='text-align:center'>{home_team}</h1>", unsafe_allow_html=True)
+# --- WAR GRID ---
+st.markdown(f"### 📅 WEEK {selected_week} SCHEDULE")
+schedule = brain.get_weekly_schedule(df, selected_week)
+
+if schedule:
+    cols = st.columns(4)
+    for i, game in enumerate(schedule):
+        with cols[i % 4]:
+            if st.button(f"{game['away']} @ {game['home']}\n{game['day']}", key=f"g_{i}"):
+                st.session_state.home = game['home']
+                st.session_state.away = game['away']
+                st.session_state.week = selected_week
+                st.rerun()
 
 st.divider()
 
-if st.button("🚀 RUN MOMENTUM SIMULATION", type="primary", use_container_width=True):
-    # 1. Data
-    h_mom, h_off = get_momentum(home_team)
-    a_mom, a_off = get_momentum(away_team)
+# --- COMMAND DECK ---
+if "home" in st.session_state:
+    home, away = st.session_state.home, st.session_state.away
     
-    # 2. Predict
+    # 1. PREDICTION
+    h_mom, h_off = brain.get_momentum(df, home)
+    a_mom, a_off = brain.get_momentum(df, away)
     in_data = pd.DataFrame([[h_mom, h_off, a_mom, a_off]], columns=['h_mom', 'h_off', 'a_mom', 'a_off'])
     sc_data = scaler.transform(in_data)
     raw = model.decision_function(sc_data)[0]
     pred = model.predict(sc_data)[0]
     
-    winner = home_team if pred == 1 else away_team
+    winner = home if pred == 1 else away
     confidence = 50 + (abs(raw) * 50)
     confidence = min(99.9, confidence)
     
-    # 3. Edge Calculation
+    # 2. LINE SHOPPING (LIVE API)
+    # Fetch odds for ALL games and find ours
+    # Note: Using fetch_best_odds logic (implementation assumed in nfl_brain or inline)
+    # For this snippet, we'll simulate the call or need the function in nfl_brain.py as well
+    # Assuming fetch_best_odds is not in nfl_brain.py yet based on previous turn, let's put it inline here or add to brain.
+    # To keep it clean, I'll add the logic here using the brain module if available, or implement a local helper.
+    
+    # Helper to fetch odds locally if not in brain
+    def get_odds_local(h, a):
+         url = f"https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds/?apiKey={ODDS_API_KEY}&regions=us&markets=h2h&bookmakers=draftkings,fanduel,betmgm,caesars&oddsFormat=american"
+         try:
+             return requests.get(url).json()
+         except: return []
+
+    raw_odds = get_odds_local(home, away)
+    best_line = {"book": "Unknown", "odds": -110, "dec": 1.91}
+    
+    # Parse API Response to find BEST odds for the PREDICTED WINNER
+    for g in raw_odds:
+        # Fuzzy match teams
+        api_h = TEAM_MAP.get(g['home_team'], g['home_team'])
+        api_a = TEAM_MAP.get(g['away_team'], g['away_team'])
+        
+        if api_h == home or api_a == away:
+            for book in g['bookmakers']:
+                for m in book['markets']:
+                    if m['key'] == 'h2h':
+                        for outcome in m['outcomes']:
+                            # Map outcome name to code
+                            o_name = TEAM_MAP.get(outcome['name'], outcome['name'][:3].upper())
+                            
+                            if o_name == winner:
+                                # Check if this is the best price found so far
+                                if outcome['price'] > best_line['dec']:
+                                    best_line = {
+                                        "book": book['title'],
+                                        "odds": outcome['point'] if 'point' in outcome else outcome['price'], # Handle US/Dec format issues
+                                        "dec": outcome['price']
+                                    }
+                                    # Convert decimal to American for display if needed
+                                    if best_line['odds'] < 2.0 and best_line['odds'] > 1.0:
+                                         # Simple Decimal to American approx for display
+                                         if best_line['dec'] >= 2.0: best_line['amer'] = f"+{int((best_line['dec']-1)*100)}"
+                                         else: best_line['amer'] = f"{int(-100/(best_line['dec']-1))}"
+                                    else:
+                                         best_line['amer'] = str(best_line['odds'])
+
+    # 3. KELLY CALCULATION
+    # Inline Kelly calc if not in brain
+    def calc_kelly(bank, prob, dec_odds, frac):
+        if dec_odds <= 1: return 0, 0
+        b = dec_odds - 1
+        p = prob / 100
+        q = 1 - p
+        f = (b * p - q) / b
+        safe_f = max(0, f) * frac
+        return bank * safe_f, safe_f * 100
+
+    wager_amt, kelly_pct = calc_kelly(bankroll, confidence, best_line['dec'], kelly_fraction)
+    
+    # 4. RATING
+    imp_prob = (1/best_line['dec']) * 100
     edge = confidence - imp_prob
-    
-    # 4. Rating Logic
     rating = "PASS"
-    if edge >= 10: rating = "DIAMOND"
-    elif edge >= 5: rating = "GOLD"
-    elif confidence > 60: rating = "SILVER"
-    
-    # 5. Log
-    mom_note = f"Diff: {h_mom:.1f} vs {a_mom:.1f}"
-    log_prediction(week, home_team, away_team, winner, confidence, rating, edge, mom_note)
-    
-    # 6. Render
-    color = "#66fcf1" if confidence > 60 else "#c5c6c7"
-    edge_color = "#00ff00" if edge > 0 else "#ff4444"
-    
-    c_res1, c_res2 = st.columns(2)
-    with c_res1:
-        st.markdown(f"""
-        <div style="background:#1f2833; border:1px solid {color}; border-radius:10px; padding:20px; text-align:center;">
-            <h3 style="color:#aaa">PROJECTED WINNER</h3>
-            <h1 style="font-size:3em; margin:0; color:{color}">{winner}</h1>
-            <h2 style="color:white">{confidence:.1f}%</h2>
+    if edge > 10: rating = "💎 DIAMOND"
+    elif edge > 5: rating = "🥇 GOLD"
+    elif confidence > 60: rating = "🥈 SILVER"
+
+    # DISPLAY
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(f"""<div class="metric-card" style="border-color:#00ffaa">
+            <h3>WINNER</h3><h1 style="color:#00ffaa">{winner}</h1>
         </div>""", unsafe_allow_html=True)
         
-    with c_res2:
-        st.markdown(f"""
-        <div style="background:#1f2833; border:1px solid {edge_color}; border-radius:10px; padding:20px; text-align:center;">
-            <h3 style="color:#aaa">EDGE vs VEGAS</h3>
-            <h1 style="font-size:3em; margin:0; color:{edge_color}">{edge:+.1f}%</h1>
-            <h2 style="color:white">{rating}</h2>
+    with c2:
+        st.markdown(f"""<div class="metric-card">
+            <h3>BEST LINE</h3>
+            <h1 style="color:white">{best_line['amer']}</h1>
+            <p style="color:#aaa">@ {best_line['book']}</p>
         </div>""", unsafe_allow_html=True)
         
-    st.markdown("### 📊 Momentum Analysis (L5 Games)")
-    st.progress(int(confidence) if winner == home_team else 100 - int(confidence))
-    st.caption(f"Momentum Balance: {away_team} ⟵ ⟶ {home_team}")
+    with c3:
+        st.markdown(f"""<div class="metric-card" style="border-color:#ffcc00">
+            <h3>KELLY WAGER</h3>
+            <h1 style="color:#ffcc00">${wager_amt:.2f}</h1>
+            <p>{kelly_pct:.1f}% of Bank</p>
+        </div>""", unsafe_allow_html=True)
+        
+    # LOGGING
+    if st.button("💾 LOG TRANSACTION"):
+        brain.log_prediction(st.session_state.week, home, away, winner, confidence, rating, edge, f"Kelly {kelly_pct:.1f}%")
+        st.success("Transaction Recorded.")
+    
+    # MOMENTUM
+    st.progress(int(confidence) if winner == home else 100 - int(confidence))
+    st.caption(f"Momentum: {away} ({a_mom:.1f}) <--> {home} ({h_mom:.1f}) | Edge: {edge:.1f}%")
